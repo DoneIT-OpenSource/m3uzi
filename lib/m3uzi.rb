@@ -325,7 +325,7 @@ protected
   end
 
   def self.parse_file_tag(line)
-    line.match(/^#EXTINF:[ \t]*(\d+),?[ \t]*(.*)$/).values_at(1, 2)
+    line.match(/^#EXTINF:[ \t]*(-?\d+),?[ \t]*(.*)$/).values_at(1, 2)
   end
 
   def self.parse_stream_tag(line)
