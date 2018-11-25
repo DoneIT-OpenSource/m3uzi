@@ -1,7 +1,9 @@
 $:<< File.dirname(__FILE__)
+require 'open-uri'
+
 require 'm3uzi/item'
 require 'm3uzi/tag'
-require 'm3uzi/file'
+require 'm3uzi/m3u_file'
 require 'm3uzi/stream'
 require 'm3uzi/comment'
 require 'm3uzi/version'
@@ -19,6 +21,7 @@ class M3Uzi
     @version = 1
     @initial_media_sequence = 0
     @sliding_window_duration = nil
+    @total_duration = nil
     @removed_file_count = 0
     @playlist_type = :live
   end
@@ -28,14 +31,9 @@ class M3Uzi
   # Read/Write M3U8 Files
   #-------------------------------------
 
-  ##
-  ## For now, reading m3u8 files is not keeping up to date with writing, so we're
-  ## disabling it in this version.  (Possibly to be re-introduced in the future.)
-  ##
   def self.read(path)
     m3u = self.new
-
-    lines = ::File.readlines(path)
+    lines = open(path).readlines
 
     lines.each_with_index do |line, i|
       begin
@@ -50,8 +48,8 @@ class M3Uzi
           duration, description = parse_file_tag(line)
           m3u.add_file do |file|
             file.path = lines[i+1].strip
-            file.duration = duration
-            file.description = description
+            file.duration = duration.to_f
+            file.description = description.length > 0 ? description : nil
           end
           m3u.final_media_file = false
         when :stream
@@ -82,26 +80,40 @@ class M3Uzi
   def write_to_io(io_stream)
     reset_encryption_key_history
     reset_byterange_history
-
     check_version_restrictions
-    io_stream << "#EXTM3U\n"
-    io_stream << "#EXT-X-VERSION:#{@version.to_i}\n" if @version > 1
-    io_stream << "#EXT-X-PLAYLIST-TYPE:#{@playlist_type.to_s.upcase}\n" if [:event,:vod].include?(@playlist_type)
 
-    if items(File).length > 0
-      io_stream << "#EXT-X-MEDIA-SEQUENCE:#{@initial_media_sequence+@removed_file_count}\n" if @playlist_type == :live
-      max_duration = valid_items(File).map { |f| f.duration.to_f }.max || 10.0
-      io_stream << "#EXT-X-TARGETDURATION:#{max_duration.ceil}\n"
+    [
+      '#EXTM3U',
+      '#EXT-X-VERSION',
+      '#EXT-X-PLAYLIST-TYPE',
+      '#EXT-X-MEDIA-SEQUENCE',
+      '#EXT-X-TARGETDURATION'
+    ].each do |tag|
+      next if @header_tags.include?(tag)
+      if tag == '#EXTM3U'
+        io_stream << "#EXTM3U\n"
+      elsif tag == '#EXT-X-VERSION'
+        io_stream << "#EXT-X-VERSION:#{@version.to_i}\n" if @version > 1
+      elsif tag == '#EXT-X-PLAYLIST-TYPE' && [:event,:vod].include?(@playlist_type)
+        io_stream << "#EXT-X-PLAYLIST-TYPE:#{@playlist_type.to_s.upcase}\n"
+      elsif items(M3UFile).length > 0
+        if tag == '#EXT-X-MEDIA-SEQUENCE' && @playlist_type == :live
+          io_stream << "#EXT-X-MEDIA-SEQUENCE:#{@initial_media_sequence+@removed_file_count}\n"
+        elsif tag == '#EXT-X-TARGETDURATION'
+          max_duration = valid_items(M3UFile).map { |f| f.duration.to_f }.max || 10.0
+          io_stream << "#EXT-X-TARGETDURATION:#{max_duration.ceil}\n"
+        end
+      end
     end
 
-    @header_tags.each do |item|
+    @header_tags.each do |key, item|
       io_stream << (item.format + "\n") if item.valid?
     end
 
     @playlist_items.each do |item|
       next unless item.valid?
 
-      if item.kind_of?(File)
+      if item.kind_of?(M3UFile)
         encryption_key_line = generate_encryption_key_line(item)
         io_stream << (encryption_key_line + "\n") if encryption_key_line
 
@@ -112,11 +124,11 @@ class M3Uzi
       io_stream << (item.format + "\n")
     end
 
-    io_stream << "#EXT-X-ENDLIST\n" if items(File).length > 0 && (@final_media_file || @playlist_type == :vod)
+    io_stream << "#EXT-X-ENDLIST\n" if items(M3UFile).length > 0 && (@final_media_file || @playlist_type == :vod)
   end
 
   def write(path)
-    ::File.open(path, "w") { |f| write_to_io(f) }
+    File.open(path, "w") { |f| write_to_io(f) }
   end
 
   def items(kind)
@@ -201,7 +213,7 @@ class M3Uzi
   #-------------------------------------
 
   def add_file(path = nil, duration = nil)
-    new_file = M3Uzi::File.new
+    new_file = M3Uzi::M3UFile.new
     new_file.path = path if path
     new_file.duration = duration if duration
     yield(new_file) if block_given?
@@ -210,7 +222,7 @@ class M3Uzi
   end
 
   def filenames
-    items(File).map { |file| file.path }
+    items(M3UFile).map { |file| file.path }
   end
 
 
@@ -268,9 +280,9 @@ class M3Uzi
     @playlist_items << new_comment
   end
 
-  # def <<(comment)
-  #   add_comment(comment)
-  # end
+  def <<(comment)
+    add_comment(comment)
+  end
 
   def check_version_restrictions
     @version = 1
@@ -280,17 +292,17 @@ class M3Uzi
     #
 
     # Check for custom IV
-    if valid_items(File).detect { |item| item.encryption_key_url && item.encryption_iv }
+    if valid_items(M3UFile).detect { |item| item.encryption_key_url && item.encryption_iv }
       @version = 2 if @version < 2
     end
 
     # Version 3 Features
-    if valid_items(File).detect { |item| item.duration.kind_of?(Float) }
+    if valid_items(M3UFile).detect { |item| item.duration.kind_of?(Float) }
       @version = 3 if @version < 3
     end
 
     # Version 4 Features
-    if valid_items(File).detect { |item| item.byterange }
+    if valid_items(M3UFile).detect { |item| item.byterange }
       @version = 4 if @version < 4
     end
     if valid_items(Tag).detect { |item| ['MEDIA','I-FRAMES-ONLY'].include?(item.name) }
@@ -302,6 +314,12 @@ class M3Uzi
     #   AUDIO/VIDEO attributes of X-STREAM-INF are used in conjunction with MEDIA, so it should trigger v4.
 
     @version
+  end
+
+  def total_duration
+    @total_duration ||= valid_items(M3UFile).inject(0.0) do |d,f|
+      f.duration > 0 ? d + f.duration : d
+    end
   end
 
 protected
@@ -326,11 +344,11 @@ protected
   end
 
   def self.parse_general_tag(line)
-    line.match(/^#EXT(?:-X-)?(?!STREAM-INF)([^:\n]+)(:([^\n]+))?$/).values_at(1, 3)
+    line.match(/^(#EXT(?:-X-)?(?!STREAM-INF)[^:\n]+):?([^\n]+)?$/).values_at(1, 2)
   end
 
   def self.parse_file_tag(line)
-    line.match(/^#EXTINF:[ \t]*(-?\d+),?[ \t]*(.*)$/).values_at(1, 2)
+    line.match(/^#EXTINF:[ \t]*(-?\d+\.?\d*),?[ \t]*(.*)$/).values_at(1, 2)
   end
 
   def self.parse_stream_tag(line)
@@ -341,14 +359,10 @@ protected
   def cleanup_sliding_window
     return unless @sliding_window_duration && @playlist_type == :live
     while total_duration > @sliding_window_duration
-      first_file = @playlist_items.detect { |item| item.kind_of?(File) && item.valid? }
+      first_file = @playlist_items.detect { |item| item.kind_of?(M3UFile) && item.valid? }
       @playlist_items.delete(first_file)
       @removed_file_count += 1
     end
-  end
-
-  def total_duration
-    valid_items(File).inject(0.0) { |d,f| d + f.duration.to_f }
   end
 
   def self.format_iv(num)

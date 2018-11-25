@@ -14,7 +14,7 @@ class M3Uzi
     end
 
     def format
-      string << "#EXT-X-#{name}"
+      string = name
       string << ":#{value}" if value
       string
     end
