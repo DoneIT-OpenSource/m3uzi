@@ -8,7 +8,7 @@ Usage
 
 Read an M3U file:
 
-    M3Uzi.read("/path/to/file.m3u8")
+    m3u = M3Uzi.read("/path/to/file.m3u8")
 
 Write an M3U file:
 
@@ -68,6 +68,3 @@ TODO
 * Stream info is not working yet
 * Tests need to be written
 * Needs to be turned into a gem
-
-
-(c) 2010 Brandon Arbini / Zencoder, Inc.

@@ -1,18 +1,20 @@
 $:<< File.dirname(__FILE__)
 require 'open-uri'
+require 'uri'
 
-require 'm3uzi/item'
-require 'm3uzi/tag'
-require 'm3uzi/m3u_file'
-require 'm3uzi/stream'
-require 'm3uzi/comment'
-require 'm3uzi/version'
+%W(item tag m3u_file stream comment version).each do |file_name|
+  require File.join('m3uzi', file_name)
+end
 
 class M3Uzi
 
-  attr_accessor :header_tags, :playlist_items
-  attr_accessor :playlist_type, :final_media_file
-  attr_accessor :version, :initial_media_sequence, :sliding_window_duration
+  attr_accessor :header_tags,
+                :playlist_items,
+                :playlist_type,
+                :final_media_file,
+                :version,
+                :initial_media_sequence,
+                :sliding_window_duration
 
   def initialize
     @header_tags = {}
@@ -26,13 +28,13 @@ class M3Uzi
     @playlist_type = :live
   end
 
-
   #-------------------------------------
   # Read/Write M3U8 Files
   #-------------------------------------
 
   def self.read(path)
     m3u = self.new
+    local = (path =~ /^\S+?:\/\/\S+?$/).nil?
     lines = open(path).readlines
 
     lines.each_with_index do |line, i|
@@ -47,7 +49,7 @@ class M3Uzi
         when :info
           duration, description = parse_file_tag(line)
           m3u.add_file do |file|
-            file.path = lines[i+1].strip
+            file.path = local ? lines[i+1].strip : format_path(path, lines[i+1].strip)
             file.duration = duration.to_f
             file.description = description.length > 0 ? description : nil
           end
@@ -55,7 +57,7 @@ class M3Uzi
         when :stream
           attributes = parse_stream_tag(line)
           m3u.add_stream do |stream|
-            stream.path = lines[i+1].strip
+            stream.path = local ? lines[i+1].strip : format_path(path, lines[i+1].strip)
             attributes.to_h.each do |k,v|
               k = k.to_s.downcase.sub('-','_')
               next unless [:bandwidth, :program_id, :codecs, :resolution].include?(k)
@@ -69,7 +71,7 @@ class M3Uzi
           next
         end
       rescue ArgumentError
-        $stderr.puts "Could not parse line #{i}, trying to continue..."
+        $stderr.puts "Could not parse line #{ i }, trying to continue..."
         next
       end
     end
@@ -82,26 +84,20 @@ class M3Uzi
     reset_byterange_history
     check_version_restrictions
 
-    [
-      '#EXTM3U',
-      '#EXT-X-VERSION',
-      '#EXT-X-PLAYLIST-TYPE',
-      '#EXT-X-MEDIA-SEQUENCE',
-      '#EXT-X-TARGETDURATION'
-    ].each do |tag|
+    %W(#EXTM3U #EXT-X-VERSION #EXT-X-PLAYLIST-TYPE #EXT-X-MEDIA-SEQUENCE #EXT-X-TARGETDURATION).each do |tag|
       next if @header_tags.include?(tag)
       if tag == '#EXTM3U'
         io_stream << "#EXTM3U\n"
       elsif tag == '#EXT-X-VERSION'
-        io_stream << "#EXT-X-VERSION:#{@version.to_i}\n" if @version > 1
+        io_stream << "#EXT-X-VERSION:#{ @version.to_i }\n" if @version > 1
       elsif tag == '#EXT-X-PLAYLIST-TYPE' && [:event,:vod].include?(@playlist_type)
-        io_stream << "#EXT-X-PLAYLIST-TYPE:#{@playlist_type.to_s.upcase}\n"
+        io_stream << "#EXT-X-PLAYLIST-TYPE:#{ @playlist_type.to_s.upcase }\n"
       elsif items(M3UFile).length > 0
         if tag == '#EXT-X-MEDIA-SEQUENCE' && @playlist_type == :live
-          io_stream << "#EXT-X-MEDIA-SEQUENCE:#{@initial_media_sequence+@removed_file_count}\n"
+          io_stream << "#EXT-X-MEDIA-SEQUENCE:#{ @initial_media_sequence + @removed_file_count }\n"
         elsif tag == '#EXT-X-TARGETDURATION'
           max_duration = valid_items(M3UFile).map { |f| f.duration.to_f }.max || 10.0
-          io_stream << "#EXT-X-TARGETDURATION:#{max_duration.ceil}\n"
+          io_stream << "#EXT-X-TARGETDURATION:#{ max_duration.ceil }\n"
         end
       end
     end
@@ -128,7 +124,7 @@ class M3Uzi
   end
 
   def write(path)
-    File.open(path, "w") { |f| write_to_io(f) }
+    File.open(path, 'w') { |f| write_to_io(f) }
   end
 
   def items(kind)
@@ -168,11 +164,11 @@ class M3Uzi
 
     if generate_line
       if @encryption_key_url.nil?
-        "#EXT-X-KEY:METHOD=NONE"
+        '#EXT-X-KEY:METHOD=NONE'
       else
         attrs = ['METHOD=AES-128']
         attrs << 'URI="' + @encryption_key_url.gsub('"','%22').gsub(/[\r\n]/,'').strip + '"'
-        attrs << "IV=#{@encryption_iv}" if @encryption_iv
+        attrs << "IV=#{ @encryption_iv }" if @encryption_iv
         '#EXT-X-KEY:' + attrs.join(',')
       end
     else
@@ -196,7 +192,7 @@ class M3Uzi
         offset = nil
       end
 
-      line = "#EXT-X-BYTERANGE:#{file.byterange_offset.to_i}"
+      line = "#EXT-X-BYTERANGE:#{ file.byterange_offset.to_i }"
       line += "@#{offset}" if offset
 
       @prev_byterange_endpoint = offset + file.byterange
@@ -255,18 +251,18 @@ class M3Uzi
     @header_tags[new_tag.name] = new_tag
   end
 
-  # def [](key)
-  #   tag_name = key.to_s.upcase.gsub("_", "-")
-  #   obj = tags.detect { |tag| tag.name == tag_name }
-  #   obj && obj.value
-  # end
-  #
-  # def []=(key, value)
-  #   add_tag do |tag|
-  #     tag.name = key
-  #     tag.value = value
-  #   end
-  # end
+  def [](key)
+    tag_name = key.to_s.upcase.gsub("_", "-")
+    obj = tags.detect { |tag| tag.name == tag_name }
+    obj && obj.value
+  end
+  
+  def []=(key, value)
+    add_tag do |tag|
+      tag.name = key
+      tag.value = value
+    end
+  end
 
 
   #-------------------------------------
@@ -356,6 +352,14 @@ protected
     match.scan(/([A-Z-]+)\s*=\s*("[^"]*"|[^,]*)/) # return attributes as array of arrays
   end
 
+  def self.format_iv(num)
+    '0x' + num.to_s(16).rjust(32,'0')
+  end
+
+  def self.format_path(source, path)
+    path =~ /^\S+?:\/\/\S+?$/ ? path : URI.join(source, path).to_s
+  end
+
   def cleanup_sliding_window
     return unless @sliding_window_duration && @playlist_type == :live
     while total_duration > @sliding_window_duration
@@ -363,10 +367,6 @@ protected
       @playlist_items.delete(first_file)
       @removed_file_count += 1
     end
-  end
-
-  def self.format_iv(num)
-    '0x' + num.to_s(16).rjust(32,'0')
   end
 
   def format_iv(num)

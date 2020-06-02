@@ -1,6 +1,5 @@
 class M3Uzi
   class M3UFile < Item
-
     attr_accessor :path, :duration, :description, :byterange
     attr_accessor :byterange_offset, :encryption_key_url, :encryption_iv
 
@@ -13,12 +12,12 @@ class M3Uzi
 
     def attribute_string
       @duration = @duration.to_f unless @duration.kind_of?(Float)
-      "#{duration},#{description.to_s.gsub(/[\r\n]/,' ').strip}"
+      "#{ duration },#{ description.to_s.gsub(/[\r\n]/,' ').strip }"
     end
 
     def format
       # Need to add key info if appropriate?
-      "#EXTINF:#{attribute_string}\n#{path}"
+      "#EXTINF:#{ attribute_string }\n#{ path }"
     end
 
     def encryption_iv=(value)
@@ -27,13 +26,17 @@ class M3Uzi
       end
 
       if value.kind_of?(String)
-        raise "Invalid encryption_iv given" unless value.length <= 32 && value =~ /^[0-9a-f]+$/i
+        raise 'Invalid encryption_iv given' unless value.length <= 32 && value =~ /^[0-9a-f]+$/i
         @encryption_iv = '0x' + value.downcase.rjust(32,'0')
       elsif value.nil?
         @encryption_iv = nil
       else
         @encryption_iv = M3Uzi.format_iv(value.to_i)
       end
+    end
+
+    def part?
+      !@path.scan(/^.+(\.ts)$/).empty?
     end
   end
 end
